@@ -35,6 +35,10 @@ import static org.slf4j.LoggerFactory.getLogger;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.List;
+import java.util.Arrays;
+import java.util.stream.Collectors;
+import javax.ws.rs.core.Link;
 
 import org.fcrepo.client.ForbiddenException;
 import org.fcrepo.client.NotFoundException;
@@ -47,8 +51,10 @@ import com.hp.hpl.jena.rdf.model.Property;
 
 import org.apache.http.HttpResponse;
 import org.apache.http.StatusLine;
+import org.apache.http.Header;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPut;
+import org.apache.http.client.methods.HttpHead;
 
 import org.apache.jena.atlas.lib.NotImplemented;
 
@@ -93,9 +99,61 @@ public class FedoraDatastreamImpl extends FedoraResourceImpl implements FedoraDa
         hasContent = getTriple( subject, DESCRIBES ) != null;
     }
 
+    /**
+     * Retrieves the URI path for the properties of a Datastream resource
+     * Inspects the headers in order to determine if another resource describes this resource
+     * @see FedoraRepositoryImpl#exists
+     * @author griffinj@lafayette.edu
+     *
+     */
     @Override
     public String getPropertiesPath() {
-        return path + "/" + FedoraJcrTypes.FCR_METADATA;
+
+        String descriptionPath = "/" + path + "/" + FedoraJcrTypes.FCR_METADATA;
+
+        final HttpHead head = httpHelper.createHeadMethod(path);
+
+        try {
+            final HttpResponse response = httpHelper.execute(head);
+            final StatusLine status = response.getStatusLine();
+            final int statusCode = status.getStatusCode();
+            final String uri = head.getURI().toString();
+            if (statusCode == SC_OK) {
+
+                final Header[] linkHeaders = response.getHeaders("Link");
+
+                if (linkHeaders != null) {
+                    final List<Header> headers = Arrays.asList(linkHeaders);
+                    final List<Link> descLinks = headers.stream()
+                                                        .map(u -> Link.valueOf(u.getValue()))
+                                                        .filter(v -> v.getRel().equals("describedby"))
+                                                        .collect(Collectors.toList());
+                    if (!descLinks.isEmpty()) {
+
+                        final Link descLink = descLinks.stream().findFirst().get();
+
+                        // This must be a relative URL
+                        descriptionPath = descLink.getUri().toString().replace(repository.getRepositoryUrl(), "");
+                    }
+                }
+            } else if (statusCode == SC_NOT_FOUND) {
+
+                LOGGER.error("error checking resource {}: {} {}", uri, statusCode, status.getReasonPhrase());
+            } else if (statusCode == SC_FORBIDDEN) {
+                LOGGER.error("request for resource {} is not authorized.", uri);
+                throw new ForbiddenException("request for resource " + uri + " is not authorized.");
+            } else {
+                LOGGER.error("error checking resource {}: {} {}", uri, statusCode, status.getReasonPhrase());
+                throw new FedoraException("error checking resource " + uri + ": " + statusCode + " " +
+                                          status.getReasonPhrase());
+            }
+        } catch (final Exception e) {
+            LOGGER.error("could not encode URI parameter", e);
+        } finally {
+            head.releaseConnection();
+        }
+
+        return descriptionPath;
     }
 
     @Override

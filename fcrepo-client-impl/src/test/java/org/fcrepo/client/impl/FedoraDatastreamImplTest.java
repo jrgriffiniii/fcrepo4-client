@@ -34,6 +34,7 @@ import static org.fcrepo.kernel.api.RdfLexicon.DESCRIBES;
 import static org.fcrepo.kernel.api.RdfLexicon.HAS_SIZE;
 import static org.fcrepo.kernel.api.RdfLexicon.HAS_MIME_TYPE;
 import static org.fcrepo.kernel.api.RdfLexicon.HAS_ORIGINAL_NAME;
+import static org.fcrepo.kernel.api.RdfLexicon.LDP_NAMESPACE;
 import static org.fcrepo.client.impl.FedoraDatastreamImpl.REST_API_DIGEST;
 
 import static org.junit.Assert.assertTrue;
@@ -59,8 +60,10 @@ import org.apache.commons.io.IOUtils;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.StatusLine;
+import org.apache.http.Header;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPut;
+import org.apache.http.client.methods.HttpHead;
 
 import org.fcrepo.client.FedoraContent;
 import org.fcrepo.client.FedoraException;
@@ -71,6 +74,9 @@ import org.fcrepo.kernel.api.RdfLexicon;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mock;
+
+import org.apache.http.client.HttpClient;
+import org.fcrepo.kernel.api.FedoraJcrTypes;
 
 /**
  * Datastream Impl test.
@@ -86,14 +92,19 @@ public class FedoraDatastreamImplTest {
     HttpHelper mockHelper;
 
     @Mock
+    HttpClient mockClient;
+
+    @Mock
     private FedoraObject mockObject;
 
     @Mock
     private Iterator<Triple> mockTriples;
 
     private FedoraDatastreamImpl datastream;
+    private FedoraDatastreamImpl rdfDatastream;
 
     private String path = "/test/image/fcr:metadata";
+    private String rdfPath = "/test/graph";
 
     private boolean isWritable = true;
 
@@ -118,8 +129,14 @@ public class FedoraDatastreamImplTest {
 
         when(mockRepository.getRepositoryUrl()).thenReturn(repositoryURL);
         when(mockRepository.getObject(eq("/test"))).thenReturn(mockObject);
+
+        when(mockRepository.getObject(eq("/test/image"))).thenReturn(mockObject);
+
         datastream = new FedoraDatastreamImpl(mockRepository, mockHelper, path);
+        rdfDatastream = new FedoraDatastreamImpl(mockRepository, mockHelper, rdfPath);
+
         assertTrue(datastream != null);
+        assertTrue(rdfDatastream != null);
 
         final Graph graph = createDefaultGraph();
         graph.add( create(dsSubj, CREATED_DATE.asNode(), ResourceFactory.createPlainLiteral(testDateValue).asNode()) );
@@ -174,7 +191,47 @@ public class FedoraDatastreamImplTest {
     }
 
     @Test
+    public void testGetPropertiesPath() throws Exception {
+
+        final String link = LDP_NAMESPACE + "Resource";
+        final String linkHeaderValue = "<" + link + ">;rel=\"describedby\"";
+
+        final URI headURI = new URI(repositoryURL + path);
+        final HttpHead mockHead = mock(HttpHead.class);
+        final HttpHead mockRdfHead = mock(HttpHead.class);
+        final HttpResponse mockResponse = mock(HttpResponse.class);
+        final HttpResponse mockRdfResponse = mock(HttpResponse.class);
+        final StatusLine mockStatus = mock(StatusLine.class);
+        final Header linkHeader = mock(Header.class);
+        final Header[] linkArray = new Header[]{ linkHeader };
+
+        when(mockHead.getURI()).thenReturn(headURI);
+        when(mockRdfHead.getURI()).thenReturn(headURI);
+
+        when(mockHelper.createHeadMethod(path)).thenReturn(mockHead);
+        when(mockHelper.createHeadMethod(rdfPath)).thenReturn(mockRdfHead);
+
+        when(mockHelper.execute(mockHead)).thenReturn(mockResponse);
+        when(mockHelper.execute(mockRdfHead)).thenReturn(mockRdfResponse);
+
+        when(mockResponse.getStatusLine()).thenReturn(mockStatus);
+        when(mockRdfResponse.getStatusLine()).thenReturn(mockStatus);
+
+        when(mockStatus.getStatusCode()).thenReturn(200);
+
+        when(mockResponse.getHeaders(eq("Link"))).thenReturn(linkArray);
+        when(linkHeader.getValue()).thenReturn(linkHeaderValue);
+
+        assertEquals("NonRdfResources should have separate resources",
+                     link, datastream.getPropertiesPath());
+
+        assertEquals("RdfResources should have fcr:metadata resources",
+                     "/" + rdfPath + "/" + FedoraJcrTypes.FCR_METADATA, rdfDatastream.getPropertiesPath());
+    }
+
+    @Test
     public void testGetProperties() throws FedoraException {
+
         assertEquals("Can't retrieve Properties",
                 datastream.getProperties().hasNext(), true);
     }
